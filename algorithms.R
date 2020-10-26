@@ -1,7 +1,19 @@
+###############
+##
+##  June Choe
+##  Ling 570
+##  PSET #1
+##
+###############
+
+
 library(tidyverse) # for data wrangling
-library(data.table) # data frame that modifies in-place
-library(here) # file referencing
+library(data.table) # for fast modify-in-place
+library(furrr) # for parallel computing
+library(here) # for file referencing
 library(tictoc) # for benchmarking
+library(progressr) # for progress bar
+
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Prepare Data ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -48,13 +60,12 @@ gold_training_parsed <- tibble(Line = readLines(here("PS1", "data", "train.gold"
 
 
 
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Pursuit ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .8, sampling = FALSE) {
+pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .78, sampling = FALSE) {
 
-  tic()
-  
   ####################
   ## Pre-processing ##
   ####################
@@ -63,12 +74,11 @@ pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .8
   corpus_words <- sort(unique(corpus$Word))
   n_words <- length(corpus_words)
   WORDS <- setNames(1:n_words, corpus_words)
-    
+  
   corpus_referents <- sort(unique(unlist(corpus$Referent)))
 
   # Store hypotheses and learned meanings
   all_hypotheses <- list()
-  learned <- list()
   
   # Vector to check novel words
   seen <- logical(n_words)
@@ -156,20 +166,6 @@ pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .8
         updated_score <- hypothesis_score + gamma * (1 - hypothesis_score)
         ASSOCIATIONS[[word_id, hypothesis]] <- updated_score
         
-        # If the meaning hasn't been learned already ...
-        if (!hypothesis %in% learned[[word]]) {
-          
-          # If updated association score passes threshold, add to lexicon
-          cur_hypotheses <- unlist(all_hypotheses[[word]])
-          denom <- sum(as.double(ASSOCIATIONS[word_id, ..cur_hypotheses])) + length(corpus_referents) * lambda
-          
-          if ((updated_score + lambda)/denom > threshold) {
-            learned[[word]][[length(learned[[word]]) + 1]] <- hypothesis
-            
-          }
-          
-        }
-        
       }
       
       # If hypothesis disconfirmed
@@ -178,47 +174,55 @@ pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .8
         # Penalize current hypothesis
         ASSOCIATIONS[[word_id, hypothesis]] <- hypothesis_score * (1 - gamma)
         
-        # Check if other hypotheses are consistent with referents present
-        cur_hypotheses <- unlist(all_hypotheses[[word]])
-        consistent_hypotheses <- cur_hypotheses %in% referents
         
-        # If so, pick one of the other hypotheses that are consistent
-        if (any(consistent_hypotheses)) {
+        # 
+        # # Check if other hypotheses are consistent with referents present
+        # cur_hypotheses <- unlist(all_hypotheses[[word]])
+        # consistent_hypotheses <- cur_hypotheses %in% referents
+        # 
+        # # If so, pick one of the other hypotheses that are consistent
+        # if (any(consistent_hypotheses)) {
+        #   
+        #   # If multiple are consistent...
+        #   if (sum(consistent_hypotheses) > 1) {
+        #     
+        #     # sample w/ probabilities if `sampling` = TRUE; else sample randomly
+        #     if (sampling) {
+        #       # TODO should I recalculate probabilities AGAIN after penalization? Or just move penalization to the end?
+        #       selected <- sample(cur_hypotheses[consistent_hypotheses], 1, prob = hypotheses_probs[consistent_hypotheses])
+        #     } else {
+        #       selected <- sample(cur_hypotheses[consistent_hypotheses], 1)
+        #     }
+        #     
+        #   }
+        #   
+        #   # If there's only one, just pick that one
+        #   else {
+        #     selected <- cur_hypotheses[consistent_hypotheses]
+        #   }
+        #   
+        # }
+        # 
+        # # If none are consistent, randomly sample from referents present
+        # else {
           
-          # If multiple are consistent...
-          if (sum(consistent_hypotheses) > 1) {
-            
-            # sample w/ probabilities if `sampling` = TRUE; else sample randomly
-            if (sampling) {
-              # TODO should I recalculate probabilities AGAIN after penalization? Or just move penalization to the end?
-              sampled <- sample(cur_hypotheses[consistent_hypotheses], 1, prob = hypotheses_probs[consistent_hypotheses])
-            } else {
-              sampled <- sample(cur_hypotheses[consistent_hypotheses], 1)
-            }
-            
-          }
-          
-          # If there's only one, just pick that one
-          else {
-            sampled <- cur_hypotheses[consistent_hypotheses]
-          }
-          
-        }
         
-        # If none are consistent, randomly sample from referents present
-        else {
-          
-          sampled <- sample(referents, 1)
+        
+          selected <- sample(referents, 1)
           
           # Add that to the running list of hypotheses
-          all_hypotheses[[word]][[length(all_hypotheses[[word]]) + 1]] <- sampled
+          all_hypotheses[[word]][[length(all_hypotheses[[word]]) + 1]] <- selected
 
-        }
+          
+          
+        # }
+          
+          
 
-        # Reward (or initialize) sampled hypothesis
-        hypothesis <- sampled
-        sampled_score <- ASSOCIATIONS[[word_id, hypothesis]]
-        ASSOCIATIONS[[word_id, hypothesis]] <- sampled_score + gamma * (1 - sampled_score)
+        # Reward (or initialize) selected hypothesis
+        hypothesis <- selected
+        selected_score <- ASSOCIATIONS[[word_id, hypothesis]]
+        ASSOCIATIONS[[word_id, hypothesis]] <- selected_score + gamma * (1 - selected_score)
         
       }
       
@@ -228,43 +232,36 @@ pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .8
     
   }
   
-  # ###################
-  # ## Normalization ##
-  # ###################
-  # 
-  # # Normalize word-meaning probabilities - Equation 1
-  # probabilities <- ASSOCIATIONS %>%
-  #   mutate(denom = rowSums(across(everything())) + length(corpus_referents) * lambda) %>%
-  #   mutate(across(-denom, ~ (.x + lambda)/denom)) %>%
-  #   select(-denom)
-  # 
-  # 
-  # #####################
-  # ## Extract Lexicon ##
-  # #####################
-  #   
-  # ## grab meaning with highest probability for each word
-  # best_meanings <- max.col(probabilities)
-  # 
-  # ## grab words that are learned (passing threshold)
-  # matrix_indices <- matrix(c(1:n_words, best_meanings), nrow = n_words) 
-  # learned_id <- which(as.data.frame(probabilities)[matrix_indices] > threshold)
-  # 
-  # ## Return the child's lexicon
-  # lexicon <- tibble(
-  #   Word = names(WORDS)[learned_id],
-  #   Learned = corpus_referents[best_meanings[learned_id]]
-  # )
-  
-  toc()
-  
-  lexicon <- 
-    tibble(
-      Word = names(learned),
-      Learned = map(learned, flatten_chr)
-    ) %>% unnest(Learned)
+  ###################
+  ## Normalization ##
+  ###################
+
+  # Normalize word-meaning probabilities - Equation 1
+  probabilities <- ASSOCIATIONS %>%
+    mutate(denom = rowSums(across(everything())) + length(corpus_referents) * lambda) %>%
+    mutate(across(-denom, ~ (.x + lambda)/denom)) %>%
+    select(-denom)
+
+
+  #####################
+  ## Extract Lexicon ##
+  #####################
+
+  ## grab meaning with highest probability for each word
+  best_meanings <- max.col(probabilities)
+
+  ## grab words that are learned (passing threshold)
+  matrix_indices <- matrix(c(1:n_words, best_meanings), nrow = n_words)
+  learned_id <- which(as.data.frame(probabilities)[matrix_indices] > threshold)
+
+  ## Return the child's lexicon
+  lexicon <- tibble(
+    Word = names(WORDS)[learned_id],
+    Learned = corpus_referents[best_meanings[learned_id]]
+  )
   
   attr(lexicon, "proposed") <- proposed
+  attr(lexicon, "assoc_table") <- ASSOCIATIONS
   
   return(lexicon)
   
@@ -273,57 +270,65 @@ pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .8
 
 
 
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~ Propose but Verify ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
 
-PbV <- function(corpus = rollins, alpha0 = .25, alpha = .75) {
+PbV <- function(corpus = rollins, alpha0 = 0, alpha = 1) {
   
-  memory <- list()
+  # Create empty list for storing hypotheses
+  meanings <- list()
   
+  # Incrementally loop through each word in the corpus
   for (i in 1:nrow(corpus)) {
     
-    # Grab the word and the referents
+    # Grab the word and the co-present referents
     word <- corpus$Word[i]
     referents <- corpus$Referent[i][[1]]
     
-    # If new, randomly sample from referents
-    if (!word %in% names(memory)) {
-      memory[[word]] <- list(Meaning = sample(referents, 1), Confirmed = FALSE)
+    # First time seeing the word?
+    if (!word %in% names(meanings)) {
+      # Randomly pick a hypothesis from the referents present
+      meanings[[word]] <- list(Meaning = sample(referents, 1), Confirmed = FALSE)
     } 
     
-    # If heard before
     else {
       
-      # If current hypothesis not among referents, randomly sample
-      if (!memory[[word]]$Meaning %in% referents) {
-        memory[[word]] <- list(Meaning = sample(referents, 1), Confirmed = FALSE)
+      # Current hypothesis not among the referents?
+      if (!meanings[[word]]$Meaning %in% referents) {
+        # Randomly pick a hypothesis from the referents present
+        meanings[[word]] <- list(Meaning = sample(referents, 1), Confirmed = FALSE)
       }
       
-      # If current hypothesis among referents
       else {
         
-        # If it's been confirmed
-        if (memory[[word]]$Confirmed) {
+        # Current hypothesis already been confirmed?
+        if (meanings[[word]]$Confirmed) {
           
-          # If you fail to retrieve confirmed hypothesis, randomly sample (otherwise leave as is)
+          # Fail to retrieve confirmed hypothesis?
           if (runif(1) > alpha) {
-            memory[[word]] <- list(Meaning = sample(referents, 1), Confirmed = FALSE)
+            # Randomly pick a hypothesis from the referents present
+            meanings[[word]] <- list(Meaning = sample(referents, 1), Confirmed = FALSE)
+          }
+          
+          else{
+            # Do nothing
           }
           
         }
         
-        # If it's not been confirmed
         else {
           
-          # If you fail to retrieve unconfirmed hypothesis, randomly sample
+          # Fail to retrieve the unconfirmed hypothesis?
           if (runif(1) < alpha0) {
-            memory[[word]]$Meaning <- sample(referents, 1)
+            # Randomly pick a hypothesis from the referents present
+            meanings[[word]]$Meaning <- sample(referents, 1)
           }
           
-          # If you correctly think it's been unconfirmed, confirm it
           else {
-            memory[[word]]$Confirmed <- TRUE
+            # Confirm the current hypothesis
+            meanings[[word]]$Confirmed <- TRUE
           }
           
         }
@@ -334,12 +339,14 @@ PbV <- function(corpus = rollins, alpha0 = .25, alpha = .75) {
     
   }
 
+  # A dataframe of all hypotheses proposed
   result <- tibble(
-    Word = names(memory),
-    Learned = map_chr(memory, 1),
+    Word = names(meanings),
+    Learned = map_chr(meanings, 1)
   )
   
-  result[map_lgl(memory, 2), ]
+  # Return only those hypotheses that have been confirmed (= learned)
+  result[map_lgl(meanings, 2), ]
   
 }
 
@@ -427,6 +434,7 @@ xsit <- function(corpus = rollins, beta = 100, lambda = .001, threshold = .8, sa
 
 
 
+# ~~~~~~~~~~~~~~~~~~~~~~~ Evaluation Function ~~~~~~~~~~~~~~~~~~~~~~~~
 
 
 
@@ -455,3 +463,130 @@ eval_algo <- function(result){
 }
 
 
+# Evaluate multiple simulations
+
+eval_sims <- function(sims) {
+  sims %>% 
+    future_map_dfr(eval_algo) %>% 
+    summarize_all(mean)
+}
+
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~ Run Simulations ~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+plan(multisession, workers = 4)
+
+run_sim <- function(model, n = 100, ...) {
+  tic()
+  
+  params <- list(...)
+  
+  p <- progressor(steps = n)
+
+  sims <- future_map(
+    1:n,
+    ~{
+      p()
+      do.call(model, params)
+    },
+    .options = furrr_options(seed = TRUE)
+  )
+  
+  toc()
+  
+  sims
+}
+
+
+
+# Propose but Verify
+
+with_progress({
+  PbV_sims <- run_sim(PbV, 1000)
+})
+
+
+with_progress({
+  pursuit_sims <- run_sim(pursuit, 1000)
+})
+
+
+
+# x %>% map_dfr(~mutate(attr(., "assoc_table"), Word = sort(unique(rollins_training$Word)))) %>% group_by(Word) %>% summarize_all(mean) %>% mutate(across(where(is.numeric), ~round(., 2))) %>%
+#   reactable(sortable = TRUE, filterable = TRUE, searchable = TRUE, showPageSizeOptions = TRUE, striped = TRUE, bordered = TRUE, defaultColDef = colDef(minWidth = 80),
+#             style = list(fontFamily = "Roboto"), pageSizeOptions = c(10, 25, 50, 100, 500), resizable = TRUE)
+# 
+# 
+# x %>% map_dfr(~mutate(attr(., "assoc_table"), Word = sort(unique(rollins_training$Word)))) %>% group_by(Word) %>% summarize_all(mean) %>% mutate(across(where(is.numeric), ~round(., 2))) %>%
+#   mutate(across(where(is.numeric), ~ifelse(. == 0, NA, .))) %>% 
+#   gt(rowname_col = "Word") %>% 
+#   fmt_missing(
+#     columns = TRUE,
+#     missing_text = "-"
+#   ) %>% 
+#   opt_all_caps()  %>%
+#   opt_table_font(
+#     font = list(
+#       google_font("Roboto"),
+#       default_fonts()
+#     )
+#   ) %>% 
+#   tab_options(
+#     column_labels.background.color = "white",
+#     table.border.top.width = px(3),
+#     table.border.top.color = "transparent",
+#     table.border.bottom.color = "transparent",
+#     table.border.bottom.width = px(3),
+#     column_labels.border.top.width = px(3),
+#     column_labels.border.top.color = "transparent",
+#     column_labels.border.bottom.width = px(3),
+#     column_labels.border.bottom.color = "black",
+#     data_row.padding = px(3),
+#     source_notes.font.size = 12,
+#     table.font.size = 16,
+#     heading.align = "left",
+#   ) 
+# 
+# 
+# mutate(attr(x[[1]], "assoc_table"), Word = sort(unique(rollins_training$Word))) %>% mutate(across(where(is.numeric), ~round(., 3))) %>%
+#   mutate(across(where(is.numeric), ~ifelse(. == 0, NA, .))) %>% relocate(Word) %>% 
+#   gt() %>% 
+#   fmt_missing(
+#     columns = TRUE,
+#     missing_text = "-"
+#   ) %>% 
+#   opt_all_caps()  %>%
+#   opt_table_font(
+#     font = list(
+#       google_font("Roboto"),
+#       default_fonts()
+#     )
+#   ) %>% 
+#   tab_style(
+#     style = list(
+#       cell_fill(color = "#DCF8C6")
+#     ),
+#     locations = cells_body(
+#       columns = TRUE,
+#       rows = Word %in% x[[1]]$Word)
+#   ) %>% 
+#   tab_options(
+#     column_labels.background.color = "white",
+#     table.border.top.width = px(3),
+#     table.border.top.color = "transparent",
+#     table.border.bottom.color = "transparent",
+#     table.border.bottom.width = px(3),
+#     column_labels.border.top.width = px(3),
+#     column_labels.border.top.color = "transparent",
+#     column_labels.border.bottom.width = px(3),
+#     column_labels.border.bottom.color = "black",
+#     data_row.padding = px(3),
+#     source_notes.font.size = 12,
+#     table.font.size = 16,
+#     heading.align = "left",
+#   ) 
+# 
+# 
+# 
