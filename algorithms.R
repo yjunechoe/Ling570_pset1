@@ -64,7 +64,7 @@ gold_training_parsed <- tibble(Line = readLines(here("PS1", "data", "train.gold"
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Pursuit ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .78, sampling = FALSE) {
+pursuit <- function(corpus = rollins_training, gamma = .02, lambda = .001, threshold = .78, sampling = FALSE) {
 
   ####################
   ## Pre-processing ##
@@ -114,7 +114,7 @@ pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .7
       hypothesis <- referents[which.min(association_scores)] #sample(referents[which(association_scores == min(association_scores))], 1)
       
       # Set association score to gamma
-      ASSOCIATIONS[[word_id, hypothesis]] <- gamma
+      set(ASSOCIATIONS, word_id, hypothesis, gamma)
       
       # Mark word as seen
       seen[word_id] <- TRUE
@@ -163,66 +163,49 @@ pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .7
       
       # If the hypothesis is confirmed, reward it
       if (hypothesis %in% referents) {
-        updated_score <- hypothesis_score + gamma * (1 - hypothesis_score)
-        ASSOCIATIONS[[word_id, hypothesis]] <- updated_score
-        
+        set(ASSOCIATIONS, word_id, hypothesis, hypothesis_score + gamma * (1 - hypothesis_score))
       }
       
       # If hypothesis disconfirmed
       else {
         
         # Penalize current hypothesis
-        ASSOCIATIONS[[word_id, hypothesis]] <- hypothesis_score * (1 - gamma)
+        set(ASSOCIATIONS, word_id, hypothesis, hypothesis_score * (1 - gamma))
         
-        
-        # 
-        # # Check if other hypotheses are consistent with referents present
-        # cur_hypotheses <- unlist(all_hypotheses[[word]])
-        # consistent_hypotheses <- cur_hypotheses %in% referents
-        # 
-        # # If so, pick one of the other hypotheses that are consistent
-        # if (any(consistent_hypotheses)) {
-        #   
-        #   # If multiple are consistent...
-        #   if (sum(consistent_hypotheses) > 1) {
-        #     
-        #     # sample w/ probabilities if `sampling` = TRUE; else sample randomly
-        #     if (sampling) {
-        #       # TODO should I recalculate probabilities AGAIN after penalization? Or just move penalization to the end?
-        #       selected <- sample(cur_hypotheses[consistent_hypotheses], 1, prob = hypotheses_probs[consistent_hypotheses])
-        #     } else {
-        #       selected <- sample(cur_hypotheses[consistent_hypotheses], 1)
-        #     }
-        #     
-        #   }
-        #   
-        #   # If there's only one, just pick that one
-        #   else {
-        #     selected <- cur_hypotheses[consistent_hypotheses]
-        #   }
-        #   
-        # }
-        # 
-        # # If none are consistent, randomly sample from referents present
-        # else {
+        # If it's pursuit w/ sampling AND any of the other hypotheses are confirmed
+        if(sampling && any(unlist(all_hypotheses[[word]]) %in% referents)) {
           
+          # Retrieve those that are consistent with referents present
+          consistent_hypotheses <- unlist(all_hypotheses[[word]]) %in% referents
+          
+          # If multiple are consistent...
+          if (sum(consistent_hypotheses) > 1) {
+            
+            # sample w/ probabilities
+            # TODO should I recalculate probabilities AGAIN after penalization? Or just move penalization to the end?
+            selected <- sample(cur_hypotheses[consistent_hypotheses], 1, prob = hypotheses_probs[consistent_hypotheses])
+          }
+          
+          # If there's only one, just pick that one
+          else {
+            selected <- cur_hypotheses[consistent_hypotheses]
+          }
+          
+        }
         
-        
+        else {
+          # Sample randomly from referents present
           selected <- sample(referents, 1)
           
           # Add that to the running list of hypotheses
-          all_hypotheses[[word]][[length(all_hypotheses[[word]]) + 1]] <- selected
-
-          
-          
-        # }
-          
-          
-
+          all_hypotheses[[word]][[length(all_hypotheses[[word]]) + 1]] <- selected  
+        }
+        
         # Reward (or initialize) selected hypothesis
-        hypothesis <- selected
-        selected_score <- ASSOCIATIONS[[word_id, hypothesis]]
-        ASSOCIATIONS[[word_id, hypothesis]] <- selected_score + gamma * (1 - selected_score)
+        new_hypothesis <- selected
+        selected_score <- ASSOCIATIONS[[word_id, new_hypothesis]]
+        
+        set(ASSOCIATIONS, word_id, new_hypothesis, selected_score + gamma * (1 - selected_score))
         
       }
       
@@ -260,6 +243,7 @@ pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .7
     Learned = corpus_referents[best_meanings[learned_id]]
   )
   
+  attr(lexicon, "hypotheses") <- all_hypotheses
   attr(lexicon, "proposed") <- proposed
   attr(lexicon, "assoc_table") <- ASSOCIATIONS
   
@@ -270,12 +254,11 @@ pursuit <- function(corpus = rollins, gamma = .02, lambda = .001, threshold = .7
 
 
 
-
 # ~~~~~~~~~~~~~~~~~~~~~~~~~ Propose but Verify ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
 
-PbV <- function(corpus = rollins, alpha0 = 0, alpha = 1) {
+PbV <- function(corpus = rollins_training, alpha0 = 0, alpha = 1) {
   
   # Create empty list for storing hypotheses
   meanings <- list()
@@ -434,7 +417,7 @@ xsit <- function(corpus = rollins, beta = 100, lambda = .001, threshold = .8, sa
 
 
 
-# ~~~~~~~~~~~~~~~~~~~~~~~ Evaluation Function ~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~ Evaluation Functions ~~~~~~~~~~~~~~~~~~~~~~~~
 
 
 
@@ -501,7 +484,7 @@ run_sim <- function(model, n = 100, ...) {
 
 
 
-# Propose but Verify
+
 
 with_progress({
   PbV_sims <- run_sim(PbV, 1000)
@@ -514,79 +497,36 @@ with_progress({
 
 
 
-# x %>% map_dfr(~mutate(attr(., "assoc_table"), Word = sort(unique(rollins_training$Word)))) %>% group_by(Word) %>% summarize_all(mean) %>% mutate(across(where(is.numeric), ~round(., 2))) %>%
-#   reactable(sortable = TRUE, filterable = TRUE, searchable = TRUE, showPageSizeOptions = TRUE, striped = TRUE, bordered = TRUE, defaultColDef = colDef(minWidth = 80),
-#             style = list(fontFamily = "Roboto"), pageSizeOptions = c(10, 25, 50, 100, 500), resizable = TRUE)
-# 
-# 
-# x %>% map_dfr(~mutate(attr(., "assoc_table"), Word = sort(unique(rollins_training$Word)))) %>% group_by(Word) %>% summarize_all(mean) %>% mutate(across(where(is.numeric), ~round(., 2))) %>%
-#   mutate(across(where(is.numeric), ~ifelse(. == 0, NA, .))) %>% 
-#   gt(rowname_col = "Word") %>% 
-#   fmt_missing(
-#     columns = TRUE,
-#     missing_text = "-"
-#   ) %>% 
-#   opt_all_caps()  %>%
-#   opt_table_font(
-#     font = list(
-#       google_font("Roboto"),
-#       default_fonts()
-#     )
-#   ) %>% 
-#   tab_options(
-#     column_labels.background.color = "white",
-#     table.border.top.width = px(3),
-#     table.border.top.color = "transparent",
-#     table.border.bottom.color = "transparent",
-#     table.border.bottom.width = px(3),
-#     column_labels.border.top.width = px(3),
-#     column_labels.border.top.color = "transparent",
-#     column_labels.border.bottom.width = px(3),
-#     column_labels.border.bottom.color = "black",
-#     data_row.padding = px(3),
-#     source_notes.font.size = 12,
-#     table.font.size = 16,
-#     heading.align = "left",
-#   ) 
-# 
-# 
-# mutate(attr(x[[1]], "assoc_table"), Word = sort(unique(rollins_training$Word))) %>% mutate(across(where(is.numeric), ~round(., 3))) %>%
-#   mutate(across(where(is.numeric), ~ifelse(. == 0, NA, .))) %>% relocate(Word) %>% 
-#   gt() %>% 
-#   fmt_missing(
-#     columns = TRUE,
-#     missing_text = "-"
-#   ) %>% 
-#   opt_all_caps()  %>%
-#   opt_table_font(
-#     font = list(
-#       google_font("Roboto"),
-#       default_fonts()
-#     )
-#   ) %>% 
-#   tab_style(
-#     style = list(
-#       cell_fill(color = "#DCF8C6")
-#     ),
-#     locations = cells_body(
-#       columns = TRUE,
-#       rows = Word %in% x[[1]]$Word)
-#   ) %>% 
-#   tab_options(
-#     column_labels.background.color = "white",
-#     table.border.top.width = px(3),
-#     table.border.top.color = "transparent",
-#     table.border.bottom.color = "transparent",
-#     table.border.bottom.width = px(3),
-#     column_labels.border.top.width = px(3),
-#     column_labels.border.top.color = "transparent",
-#     column_labels.border.bottom.width = px(3),
-#     column_labels.border.bottom.color = "black",
-#     data_row.padding = px(3),
-#     source_notes.font.size = 12,
-#     table.font.size = 16,
-#     heading.align = "left",
-#   ) 
-# 
-# 
-# 
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~ Build Table ~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+
+F1_list <- list(
+  PbV_sims_raw$F1,
+  pursuit_sims_raw$F1
+)
+
+
+bind_rows(
+  PbV_sims_raw %>% 
+    summarize_all(mean) %>% 
+    mutate(Model = "Propose but Verify"),
+  pursuit_sims_raw %>% 
+    summarize_all(mean) %>% 
+    mutate(Model = "Pursuit")
+) %>% 
+  relocate(Model) %>% 
+  mutate(
+    `F1-Distribution` = "",
+    across(where(is.double), ~round(.x, 3))
+  ) %>% 
+  kbl() %>% 
+  kable_classic(full_width = FALSE) %>% 
+  add_header_above(c("", "Performance Metrics" = 4)) %>% 
+  column_spec(5, image = spec_boxplot(F1_list)) %>%
+  kable_styling(bootstrap_options = "none", font_size = 12, html_font = "CMU Typewriter Text")
+  
+
