@@ -177,40 +177,15 @@ pursuit <- function(corpus = rollins_training, gamma = .02, lambda = .001, thres
         # Penalize current hypothesis
         set(ASSOCIATIONS, word_id, hypothesis, hypothesis_score * (1 - gamma))
         
-        # If it's pursuit w/ sampling AND any of the other hypotheses are confirmed
-        if(sampling && any(unlist(all_hypotheses[[word]]) %in% referents)) {
-          
-          # Retrieve those that are consistent with referents present
-          consistent_hypotheses <- unlist(all_hypotheses[[word]]) %in% referents
-          
-          # If multiple are consistent...
-          if (sum(consistent_hypotheses) > 1) {
-            
-            # sample w/ probabilities
-            # TODO should I recalculate probabilities AGAIN after penalization? Or just move penalization to the end?
-            selected <- sample(cur_hypotheses[consistent_hypotheses], 1, prob = hypotheses_probs[consistent_hypotheses])
-          }
-          
-          # If there's only one, just pick that one
-          else {
-            selected <- cur_hypotheses[consistent_hypotheses]
-          }
-          
-        }
-        
-        else {
-          # Sample randomly from referents present
-          selected <- sample(referents, 1)
-          
-          # Add that to the running list of hypotheses
-          all_hypotheses[[word]][[length(all_hypotheses[[word]]) + 1]] <- selected  
-        }
+        # Sample randomly from referents present
+        selected <- sample(referents, 1)
         
         # Reward (or initialize) selected hypothesis
-        new_hypothesis <- selected
-        selected_score <- ASSOCIATIONS[[word_id, new_hypothesis]]
+        selected_score <- ASSOCIATIONS[[word_id, selected]]
+        set(ASSOCIATIONS, word_id, selected, selected_score + gamma * (1 - selected_score))
         
-        set(ASSOCIATIONS, word_id, new_hypothesis, selected_score + gamma * (1 - selected_score))
+        # Add it to the running list of hypotheses
+        all_hypotheses[[word]][[length(all_hypotheses[[word]]) + 1]] <- selected
         
       }
       
