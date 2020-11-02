@@ -59,6 +59,11 @@ gold_training_parsed <- tibble(Line = readLines(here("PS1", "data", "train.gold"
   separate(Line, c("Word", "Meaning"), " ")
 
 
+####### Manual load
+## rollins_training <- readRDS("rollins_training.rds")
+## gold_training_parsed <- read_csv("gold_training_parsed.csv")
+#######
+
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Pursuit ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -250,8 +255,6 @@ pursuit <- function(corpus = rollins_training, gamma = .02, lambda = .001, thres
   return(lexicon)
   
 }
-
-pursuit()
 
 
 
