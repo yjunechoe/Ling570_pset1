@@ -11,7 +11,7 @@ library(tidyverse) # for data wrangling
 library(data.table) # for fast modify-in-place
 library(furrr) # for parallel computing
 library(here) # for file referencing
-library(tictoc) # for benchmarking
+library(tictoc); library(microbenchmark) # for benchmarking
 library(progressr) # for progress bar
 
 
@@ -111,7 +111,7 @@ pursuit <- function(corpus = rollins_training, gamma = .02, lambda = .001, thres
       
       # Grab referent with lowest association score (randomly sample if multiple)
       association_scores <- as.double(ASSOCIATIONS[, lapply(.SD, max), .SDcols = referents])
-      hypothesis <- referents[which.min(association_scores)] #sample(referents[which(association_scores == min(association_scores))], 1)
+      hypothesis <- sample(referents[which(association_scores == min(association_scores))], 1) # referents[which.min(association_scores)]
       
       # Set association score to gamma
       set(ASSOCIATIONS, word_id, hypothesis, gamma)
@@ -251,11 +251,11 @@ pursuit <- function(corpus = rollins_training, gamma = .02, lambda = .001, thres
   
 }
 
+pursuit()
 
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~ Propose but Verify ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 
 
 PbV <- function(corpus = rollins_training, alpha0 = 0, alpha = 1) {
@@ -335,14 +335,10 @@ PbV <- function(corpus = rollins_training, alpha0 = 0, alpha = 1) {
 
 
 
-
-
-
-
 # ~~~~~~~~~~~~~~~~~~~~~~~~~ Cross Situational ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-xsit <- function(corpus = rollins, beta = 100, lambda = .001, threshold = .8, sampling = FALSE) {
+xsit <- function(corpus = rollins_training, beta = 100, lambda = .001, threshold = .09, sampling = FALSE) {
   
   tic()
   
@@ -361,7 +357,6 @@ xsit <- function(corpus = rollins, beta = 100, lambda = .001, threshold = .8, sa
   # Initialize probability table with equal likelihood, row sums to 1
   ALIGNMENTS <- data.table(matrix(1/length(corpus_words), nrow = length(corpus_referents), ncol = length(corpus_words)))
   setnames(ALIGNMENTS, new = corpus_words)
-
 
   for (i in 1:nrow(corpus)) {
     
@@ -417,6 +412,8 @@ xsit <- function(corpus = rollins, beta = 100, lambda = .001, threshold = .8, sa
 
 
 
+
+
 # ~~~~~~~~~~~~~~~~~~~~~~~ Evaluation Functions ~~~~~~~~~~~~~~~~~~~~~~~~
 
 
@@ -456,6 +453,7 @@ eval_sims <- function(sims) {
 
 
 
+
 # ~~~~~~~~~~~~~~~~~~~~~~~ Run Simulations ~~~~~~~~~~~~~~~~~~~~~~~~
 
 
@@ -484,16 +482,24 @@ run_sim <- function(model, n = 100, ...) {
 
 
 
-
-
+# PbV
 with_progress({
   PbV_sims <- run_sim(PbV, 1000)
+  PbV_sims_metrics <- eval_sims(PbV_sims)
 })
 
-
+# pursuit
 with_progress({
   pursuit_sims <- run_sim(pursuit, 1000)
+  pursuit_sims_metrics <- eval_sims(pursuit_sims)
 })
+
+# pursuit w/ sampling
+with_progress({
+  pursuit_sampling_sims <- run_sim(pursuit, 1000, sampling = TRUE)
+  pursuit_sampling_sims_metrics <- eval_sims(pursuit_sampling_sims)
+})
+
 
 
 
@@ -501,32 +507,36 @@ with_progress({
 
 # ~~~~~~~~~~~~~~~~~~~~~~~ Build Table ~~~~~~~~~~~~~~~~~~~~~~~~
 
-
-
+library(kableExtra)
 
 F1_list <- list(
-  PbV_sims_raw$F1,
-  pursuit_sims_raw$F1
+  future_map_dfr(PbV_sims, eval_algo)$F1,
+  future_map_dfr(pursuit_sims, eval_algo)$F1,
+  future_map_dfr(pursuit_sampling_sims, eval_algo)$F1
 )
 
+tbl_df <- bind_rows(
+  PbV_sims_metrics,
+  pursuit_sims_metrics,
+  pursuit_sampling_sims_metrics
+)
 
-bind_rows(
-  PbV_sims_raw %>% 
-    summarize_all(mean) %>% 
-    mutate(Model = "Propose but Verify"),
-  pursuit_sims_raw %>% 
-    summarize_all(mean) %>% 
-    mutate(Model = "Pursuit")
-) %>% 
+tbl_df %>% 
+  mutate(Model = c("Propose but Verify", "Pursuit", "Pursuit (sampling)")) %>% 
   relocate(Model) %>% 
   mutate(
-    `F1-Distribution` = "",
+    `F1-Dist` = "",
     across(where(is.double), ~round(.x, 3))
   ) %>% 
   kbl() %>% 
   kable_classic(full_width = FALSE) %>% 
   add_header_above(c("", "Performance Metrics" = 4)) %>% 
-  column_spec(5, image = spec_boxplot(F1_list)) %>%
-  kable_styling(bootstrap_options = "none", font_size = 12, html_font = "CMU Typewriter Text")
-  
-
+  column_spec(2, background = ifelse(tbl_df[[1]] == max(tbl_df[[1]]), "#ADADADFF", "white")) %>% 
+  column_spec(3, background = ifelse(tbl_df[[2]] == max(tbl_df[[2]]), "#ADADADFF", "white")) %>% 
+  column_spec(4, background = ifelse(tbl_df[[3]] == max(tbl_df[[3]]), "#ADADADFF", "white")) %>% 
+  column_spec(5, image = spec_hist(F1_list, breaks = c(5, 10, 10))) %>%
+  kable_styling(
+    bootstrap_options = "none", 
+    font_size = 18,
+    html_font = "CMU Typewriter Text"
+  )
