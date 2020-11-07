@@ -158,7 +158,7 @@ pursuit <- function(corpus = rollins_training, gamma = .02, lambda = .001, thres
         
       }
       
-      # Retrieve association score for that hypothesis for updating
+      # Grab association score for that hypothesis for updating
       hypothesis_score <- ASSOCIATIONS[[word_id, hypothesis]]
       
       
@@ -272,11 +272,7 @@ PbV <- function(corpus = rollins_training, alpha0 = 0, alpha = 1) {
             # Randomly pick a hypothesis from the referents present
             meanings[[word]] <- list(Meaning = sample(referents, 1), Confirmed = FALSE)
           }
-          
-          else{
-            # Do nothing
-          }
-          
+
         }
         
         else {
@@ -316,7 +312,7 @@ PbV <- function(corpus = rollins_training, alpha0 = 0, alpha = 1) {
 # ~~~~~~~~~~~~~~~~~~~~~~~~~ Cross Situational ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-xsit <- function(corpus = rollins_training, beta = 100, lambda = .001, threshold = .09, sampling = FALSE) {
+xsit <- function(corpus = rollins_training, beta = 100, lambda = .01, threshold = .09) {
   
   tic()
   
@@ -324,68 +320,103 @@ xsit <- function(corpus = rollins_training, beta = 100, lambda = .001, threshold
   ## Pre-processing ##
   ####################
   
+  # Add dummy referent to corpus
+  corpus <- corpus %>% 
+    mutate(Referent = map(Referent, ~c(.x, "dummy")))
+  
   # Grab corpus info
   corpus_words <- sort(unique(corpus$Word))
   corpus_referents <- sort(unique(unlist(corpus$Referent)))
-  REFERENTS <- setNames(1:length(corpus_referents), corpus_referents)
+  WORDS <- setNames(1:length(corpus_words), corpus_words)
+  
+  # Restructure corpus by utterance
+  corpus <- corpus %>% 
+    group_by(Utterance, Referent) %>% 
+    nest(Word = Word) %>% 
+    ungroup() %>% 
+    mutate(Word = map(Word, ~.x$Word))
   
   # List to store learned meanings
   learned <- list()
   
-  # Initialize probability table with equal likelihood, row sums to 1
-  ALIGNMENTS <- data.table(matrix(1/length(corpus_words), nrow = length(corpus_referents), ncol = length(corpus_words)))
-  setnames(ALIGNMENTS, new = corpus_words)
+  # Vector to check novel words
+  seen <- logical(length(corpus_words))
+  
+  # Initialize alignment probability tables
+  PROBABILITIES <- data.table(matrix(0, nrow = length(corpus_words), ncol = length(corpus_referents)))
+  setnames(PROBABILITIES, new = corpus_referents)
+  ALIGNMENTS <- data.table(matrix(0, nrow = length(corpus_words), ncol = length(corpus_referents)))
+  setnames(ALIGNMENTS, new = corpus_referents)
 
+  # For each utterance in corpus
   for (i in 1:nrow(corpus)) {
     
-    # Grab the word and the referents
-    word <- corpus$Word[i]
+    # Grab the words and the referents
+    words <- corpus$Word[i][[1]]
     referents <- corpus$Referent[i][[1]]
-    referents_id <- REFERENTS[referents]
-    
-    
-    ######################
-    ## Alignments(w, m) ##
-    ######################
-    
-    # Retrieve probability distribution of meanings over the word
-    word_probabilities <- ALIGNMENTS[[word]]
-    
-    # Calculate alignments for referents present
-    alignments <- word_probabilities[referents_id]/sum(word_probabilities[referents_id])
-    
-    # Update alignment table
-    word_probabilities[referents_id] <- alignments
-    ALIGNMENTS[[word]] <- word_probabilities
-    
-    # Normalize probabilities within each meaning (rows)
-    for (referent_id in referents_id) {
-      ALIGNMENTS[referent_id] <- ALIGNMENTS[referent_id]/sum(as.double(ALIGNMENTS[referent_id]))
+
+    for (word in words) {
+      word_id <- WORDS[word]
+      
+      for (referent in referents) {
+        
+        # Initialize
+        if (PROBABILITIES[[word_id, referent]] == 0) {
+          set(PROBABILITIES, word_id, referent, 1/beta)
+          seen[word_id] <- TRUE
+        }
+        
+      }
+      
     }
     
-    
-    #TODO
-    
-    ########################
-    ## Probabilities(w|m) ##
-    ########################
-    
-    # Normalize probabilities within the word (column)
-    
-    
-    if (max(PROBABILITIES[[word]]) > threshold) {
-      meaning <- names(REFERENTS)[which.max(updated_word_probabilities)]
-      # If it's new, add it to the lexicon
-      if (!meaning %in% unlist(learned[[word]])) {
-        learned[[word]][[length(learned[[word]]) + 1]] <- meaning
+    for(referent in referents) {
+      
+      # Adjust alignments
+      for (word in words) {
+        word_id <- WORDS[word]
+        
+        alignment_adjustment <- PROBABILITIES[[word_id, referent]]/(sum(PROBABILITIES[word_id, ..referents]))
+        set(ALIGNMENTS, word_id, referent, ALIGNMENTS[[word_id, referent]] + alignment_adjustment)
       }
+      
+    }
+    
+    for (referent in referents) {
+
+      # Adjust probabilities
+      for (word in WORDS[seen]) {
+        word_id <- WORDS[word]
+        
+        probability_adjustment <- (ALIGNMENTS[[word_id, referent]] + lambda)/(sum(ALIGNMENTS[[referent]]) + (beta * lambda))
+        set(PROBABILITIES, word_id, referent, probability_adjustment)
+      }
+      
     }
     
   }
   
-  learned
+  ## grab meaning with highest probability for each word
+  best_meanings <- max.col(PROBABILITIES)
   
-    
+  ## grab words that are learned (passing threshold)
+  matrix_indices <- matrix(c(1:length(corpus_words), best_meanings), nrow = length(corpus_words))
+  learned_id <- which(as.data.frame(PROBABILITIES)[matrix_indices] > threshold)
+  
+  
+  ## Return the child's lexicon
+  lexicon <- tibble(
+    Word = names(WORDS)[learned_id],
+    Learned = corpus_referents[best_meanings[learned_id]]
+  )
+  
+  attr(lexicon, "align_table") <- ALIGNMENTS
+  attr(lexicon, "prob_table") <- PROBABILITIES
+  
+  toc()
+  
+  return(lexicon)
+  
 }
 
 
@@ -478,7 +509,8 @@ with_progress({
   pursuit_sampling_sims_metrics <- eval_sims(pursuit_sampling_sims)
 })
 
-
+xsit_sims <- xsit()
+xsit_sims_metrics <- eval_algo(xsit_sims)
 
 
 
@@ -490,17 +522,19 @@ library(kableExtra)
 F1_list <- list(
   future_map_dfr(PbV_sims, eval_algo)$F1,
   future_map_dfr(pursuit_sims, eval_algo)$F1,
-  future_map_dfr(pursuit_sampling_sims, eval_algo)$F1
+  future_map_dfr(pursuit_sampling_sims, eval_algo)$F1,
+  xsit_sims_metrics$F1
 )
 
 tbl_df <- bind_rows(
   PbV_sims_metrics,
   pursuit_sims_metrics,
-  pursuit_sampling_sims_metrics
+  pursuit_sampling_sims_metrics,
+  xsit_sims_metrics
 )
 
 tbl_df %>% 
-  mutate(Model = c("Propose but Verify", "Pursuit", "Pursuit (sampling)")) %>% 
+  mutate(Model = c("Propose but Verify", "Pursuit", "Pursuit (sampling)", "Cross-situational")) %>% 
   relocate(Model) %>% 
   mutate(
     `F1-Dist` = "",
@@ -512,7 +546,7 @@ tbl_df %>%
   column_spec(2, background = ifelse(tbl_df[[1]] == max(tbl_df[[1]]), "#ADADADFF", "white")) %>% 
   column_spec(3, background = ifelse(tbl_df[[2]] == max(tbl_df[[2]]), "#ADADADFF", "white")) %>% 
   column_spec(4, background = ifelse(tbl_df[[3]] == max(tbl_df[[3]]), "#ADADADFF", "white")) %>% 
-  column_spec(5, image = spec_hist(F1_list, breaks = c(5, 10, 10))) %>%
+  column_spec(5, image = spec_hist(F1_list, breaks = c(5, 10, 10, 1), col = c("grey", "grey", "grey", NA), border = c("black", "black", "black", NA))) %>%
   kable_styling(
     bootstrap_options = "none", 
     font_size = 18,
