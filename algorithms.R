@@ -54,14 +54,9 @@ gold_parsed <- tibble(Line = readLines(here("PS1", "data", "gold.txt"))) %>%
   separate(Line, c("Word", "Meaning"), " ")
 
 
-
-gold_training_parsed <- tibble(Line = readLines(here("PS1", "data", "train.gold"))) %>% 
-  separate(Line, c("Word", "Meaning"), " ")
-
-
 ####### Manual load
 ## rollins_training <- readRDS("rollins_training.rds")
-## gold_training_parsed <- read_csv("gold_training_parsed.csv")
+## gold_parsed <- read_csv("gold_training_parsed.csv")
 #######
 
 
@@ -303,7 +298,9 @@ PbV <- function(corpus = rollins_training, alpha0 = 0, alpha = 1) {
   )
   
   # Return only those hypotheses that have been confirmed (= learned)
-  result[map_lgl(meanings, 2), ]
+  # result[map_lgl(meanings, 2), ]
+  
+  result
   
 }
 
@@ -429,9 +426,9 @@ xsit <- function(corpus = rollins_training, beta = 100, lambda = .01, threshold 
 
 # Evaluation Algorithm
 
-eval_algo <- function(result){
+eval_algo <- function(result, standard = gold_parsed){
   
-  performance <- full_join(result, gold_parsed, by = "Word")
+  performance <- full_join(result, standard, by = "Word")
   
   true_positives <- nrow(filter(performance, Learned == Meaning))
   
@@ -439,7 +436,7 @@ eval_algo <- function(result){
   precision <- true_positives/nrow(result)
   
   # Of the words that should be learned, which were learned correctly?
-  recall <- true_positives/nrow(gold_parsed)
+  recall <- true_positives/nrow(standard)
   
   F1 <- 2 * (precision * recall)/(precision + recall)
   
@@ -454,9 +451,9 @@ eval_algo <- function(result){
 
 # Evaluate multiple simulations
 
-eval_sims <- function(sims) {
+eval_sims <- function(sims, ...) {
   sims %>% 
-    future_map_dfr(eval_algo) %>% 
+    future_map_dfr(eval_algo, ...) %>% 
     summarize_all(mean)
 }
 
@@ -466,7 +463,7 @@ eval_sims <- function(sims) {
 # ~~~~~~~~~~~~~~~~~~~~~~~ Run Simulations ~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-plan(multisession, workers = 4)
+plan(multisession, workers = availableCores() - 1)
 
 run_sim <- function(model, n = 100, ...) {
   tic()
@@ -488,7 +485,6 @@ run_sim <- function(model, n = 100, ...) {
   
   sims
 }
-
 
 
 # PbV
