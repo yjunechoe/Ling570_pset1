@@ -547,4 +547,6 @@ tbl_df %>%
     bootstrap_options = "none", 
     font_size = 18,
     html_font = "CMU Typewriter Text"
-  )
+  ) %>% 
+  as_image(file = "performance_tbl.png")
+
